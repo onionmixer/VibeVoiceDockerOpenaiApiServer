@@ -1,0 +1,58 @@
+# docker-compose.dgx-spark.yml
+# VibeVoice OpenAI API Server - DGX Spark (ARM64 Grace Blackwell)
+
+services:
+  vibevoice-api:
+    build:
+      context: ..
+      dockerfile: ./VibeVoiceDockerOpenaiApiServer/Dockerfile
+      args:
+        TARGETARCH: arm64
+    image: vibevoice-openai-api:dgx-spark
+    container_name: vibevoice-openai-api-dgx
+    ports:
+      - "${API_PORT:-8080}:8080"
+    environment:
+      # Device settings
+      - DEVICE=${DEVICE:-cuda}
+      # DGX Spark requires SDPA (Flash Attention not supported on ARM64)
+      - ATTN_IMPLEMENTATION=sdpa
+      # Model paths (inside container)
+      - ASR_MODEL_PATH=/models/VibeVoice-ASR
+      - TTS_MODEL_PATH=/models/VibeVoice-Realtime-0.5B
+      - VOICES_PATH=/models/voices
+      # Service toggles
+      - ASR_ENABLED=${ASR_ENABLED:-true}
+      - TTS_ENABLED=${TTS_ENABLED:-true}
+      # Model settings - DGX Spark can use bfloat16 with Grace Blackwell
+      - ASR_DTYPE=${ASR_DTYPE:-bfloat16}
+      - TTS_DTYPE=${TTS_DTYPE:-bfloat16}
+      # TTS settings
+      - TTS_CFG_SCALE=${TTS_CFG_SCALE:-1.5}
+      - TTS_INFERENCE_STEPS=${TTS_INFERENCE_STEPS:-5}
+      - DEFAULT_VOICE=${DEFAULT_VOICE:-carter}
+      # DGX Spark optimizations
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+    volumes:
+      # External model directory mount (required)
+      - ${MODEL_DIR:-./models}:/models:ro
+      # HuggingFace cache
+      - ${HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+
+networks:
+  default:
+    name: vibevoice-network
