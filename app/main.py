@@ -30,6 +30,8 @@ async def lifespan(app: FastAPI):
     print(f"Attention: {settings.attn_implementation}")
     print(f"ASR Enabled: {settings.asr_enabled}")
     print(f"TTS Enabled: {settings.tts_enabled}")
+    if settings.tts_enabled:
+        print(f"TTS Model Type: {settings.tts_model_type}")
     print("=" * 60)
 
     # Initialize services
@@ -115,15 +117,19 @@ async def root():
 async def health():
     """Health check endpoint."""
     from app.routes.stt import _stt_service
-    from app.routes.tts import _tts_service
+    from app.routes.tts import _tts_services
 
     stt_status = "disabled"
     if settings.asr_enabled:
         stt_status = "ready" if (_stt_service and _stt_service.is_loaded) else "loading"
 
-    tts_status = "disabled"
+    tts_status = {}
     if settings.tts_enabled:
-        tts_status = "ready" if (_tts_service and _tts_service.is_loaded) else "loading"
+        if not _tts_services:
+            tts_status = {"status": "loading"}
+        else:
+            for model_type, service in _tts_services.items():
+                tts_status[model_type] = "ready" if service.is_loaded else "loading"
 
     return {
         "status": "healthy",
@@ -138,6 +144,8 @@ async def health():
 @app.get("/v1/models")
 async def list_models():
     """List available models (OpenAI-compatible)."""
+    from app.routes.tts import _tts_services
+
     models = []
 
     if settings.asr_enabled:
@@ -152,15 +160,41 @@ async def list_models():
         })
 
     if settings.tts_enabled:
-        models.append({
-            "id": "vibevoice-realtime",
-            "object": "model",
-            "created": 1700000000,
-            "owned_by": "microsoft",
-            "permission": [],
-            "root": "vibevoice-realtime",
-            "parent": None,
-        })
+        # List models based on what's actually loaded
+        if _tts_services:
+            for model_type, service in _tts_services.items():
+                models.append({
+                    "id": service.model_id,
+                    "object": "model",
+                    "created": 1700000000,
+                    "owned_by": "microsoft",
+                    "permission": [],
+                    "root": service.model_id,
+                    "parent": None,
+                })
+        else:
+            # Fallback: list based on config
+            model_type = settings.tts_model_type.lower()
+            if model_type in ("0.5b", "both"):
+                models.append({
+                    "id": "vibevoice-realtime",
+                    "object": "model",
+                    "created": 1700000000,
+                    "owned_by": "microsoft",
+                    "permission": [],
+                    "root": "vibevoice-realtime",
+                    "parent": None,
+                })
+            if model_type in ("1.5b", "both"):
+                models.append({
+                    "id": "vibevoice-1.5b",
+                    "object": "model",
+                    "created": 1700000000,
+                    "owned_by": "microsoft",
+                    "permission": [],
+                    "root": "vibevoice-1.5b",
+                    "parent": None,
+                })
 
     return {
         "object": "list",

@@ -2,7 +2,14 @@
 
 ## 프로젝트 개요
 
-MeloTTS-Docker-API-Server를 참고하여 VibeVoice-ASR을 활용한 Open WebUI 호환 음성 API 서버를 구축하는 프로젝트입니다.
+MeloTTS-Docker-API-Server를 참고하여 VibeVoice 모델을 활용한 Open WebUI 호환 음성 API 서버를 구축하는 프로젝트입니다.
+
+**지원 모델**:
+- **STT**: VibeVoice-ASR (7B) — 음성→텍스트
+- **TTS**: VibeVoice-Realtime-0.5B — 텍스트→음성 (실시간 스트리밍, 저지연)
+- **TTS**: VibeVoice-1.5B — 텍스트→음성 (고품질 전체 모델)
+
+> VibeVoice-TTS 1.5B 모델의 추론 코드가 Microsoft에 의해 제거되었으나(2025-09), shijincai fork에서 복원된 코드를 활용하여 지원합니다.
 
 **구현 디렉터리**: `VibeVoiceDockerOpenaiApiServer/`
 
@@ -21,15 +28,16 @@ MeloTTS-Docker-API-Server를 참고하여 VibeVoice-ASR을 활용한 Open WebUI 
 | Docker | Python 3.9 기반, MeloTTS 의존성 |
 | **Open WebUI 호환** | ❌ (OpenAI TTS API 형식 아님) |
 
-### 2. VibeVoice 분석
+### 2. VibeVoice 분석 (본 프로젝트에서 사용하는 모델)
 
-| 모델 | 크기 | 기능 | 코드 상태 |
-|------|------|------|-----------|
-| **VibeVoice-ASR** | 7B (17.3GB) | 60분 긴 오디오 STT, 화자분리, 타임스탬프 | ✅ 사용가능 |
-| **VibeVoice-TTS** | 1.5B | 90분 TTS, 다중화자 | ❌ 코드 제거됨 (2025-09) |
-| **VibeVoice-Realtime** | 0.5B | 실시간 스트리밍 TTS (~200ms 지연) | ✅ 사용가능 |
+| 모델 | 크기 | 기능 | 상태 |
+|------|------|------|------|
+| **VibeVoice-ASR** | 7B (17.3GB) | 60분 긴 오디오 STT, 화자분리, 타임스탬프 | ✅ 사용 |
+| **VibeVoice-Realtime-0.5B** | 0.5B (1.9GB) | 실시간 스트리밍 TTS (~200ms 지연), 25개 음성 프리셋 | ✅ 사용 |
+| **VibeVoice-1.5B** | 1.5B (5.4GB) | 고품질 TTS, 9개 음성 프리셋 (.wav), CFG 기반 | ✅ 사용 |
 
-**VibeVoice-TTS 코드 제거 이유**: Microsoft의 책임있는 AI 원칙에 따라 악용 방지를 위해 제거됨.
+> **듀얼 모델 지원**: `TTS_MODEL_TYPE` 환경 변수로 "0.5b", "1.5b", "both" 중 선택. 기본값은 "0.5b" (하위 호환).
+> 1.5B 추론 코드는 [shijincai/VibeVoice](https://github.com/shijincai/VibeVoice) fork에서 복원.
 
 ### 3. Open WebUI API 규격
 
@@ -43,21 +51,22 @@ MeloTTS-Docker-API-Server를 참고하여 VibeVoice-ASR을 활용한 Open WebUI 
 - 요청: `multipart/form-data` (file + model)
 - 응답: `{"text": "인식된 텍스트"}`
 
-### 4. VibeVoice만으로 Open WebUI TTS API 규격 만족 여부
+### 4. Open WebUI API 규격 충족 방식
 
-| 모델 | TTS 가능 여부 | Open WebUI 호환 |
-|------|---------------|-----------------|
-| VibeVoice-ASR | ❌ ASR 모델 | N/A |
-| VibeVoice-TTS | ❌ 코드 제거됨 | N/A |
-| VibeVoice-Realtime | ✅ TTS 가능 | ❌ WebSocket 전용 (REST API 래퍼 필요) |
+| 기능 | 사용 모델 | 네이티브 호환 | 본 프로젝트의 해결 |
+|------|-----------|---------------|-------------------|
+| STT | VibeVoice-ASR (7B) | ❌ (자체 API) | ✅ OpenAI 호환 REST 래퍼 구현 |
+| TTS | VibeVoice-Realtime-0.5B | ❌ (WebSocket 전용) | ✅ OpenAI 호환 REST 래퍼 구현 |
 
-**결론**: VibeVoice만으로는 Open WebUI API 규격을 **직접 만족하지 않음**. OpenAI 호환 REST API 래퍼를 구현해야 함.
+**결론**: VibeVoice 모델은 Open WebUI API 규격을 직접 만족하지 않으므로, 본 프로젝트에서 OpenAI 호환 REST API 래퍼를 구현하여 해결.
 
 ---
 
 ## 모델 다운로드 및 설정 가이드
 
-### VibeVoice-ASR 모델 파일 구조
+> **현재 상태**: 모든 모델 데이터 다운로드 완료 ✅ (2026-02-05)
+
+### VibeVoice-ASR 모델 파일 구조 ✅
 
 [HuggingFace microsoft/VibeVoice-ASR](https://huggingface.co/microsoft/VibeVoice-ASR)에서 다운로드해야 하는 파일 목록:
 
@@ -76,6 +85,22 @@ MeloTTS-Docker-API-Server를 참고하여 VibeVoice-ASR을 활용한 Open WebUI 
 | `README.md` | 2.56 KB | 모델 설명서 |
 
 **총 크기**: 약 17.3 GB
+
+### VibeVoice-Realtime-0.5B 모델 파일 구조 ✅
+
+[HuggingFace microsoft/VibeVoice-Realtime-0.5B](https://huggingface.co/microsoft/VibeVoice-Realtime-0.5B)에서 다운로드:
+
+| 파일명 | 크기 | 설명 |
+|--------|------|------|
+| `config.json` | 2.1 KB | 모델 설정 파일 |
+| `preprocessor_config.json` | 360 B | 프로세서 설정 파일 |
+| `model.safetensors` | 1.9 GB | 모델 가중치 |
+| `README.md` | 10 KB | 모델 설명서 |
+
+**총 크기**: 약 1.9 GB
+
+> **참고**: VibeVoice-ASR 레포에는 `preprocessor_config.json`이 제공되지 않습니다.
+> ASR 프로세서는 기본값 (`speech_tok_compress_ratio=3200`, `target_sample_rate=24000`)으로 폴백합니다.
 
 ### 다운로드 방법
 
@@ -127,31 +152,59 @@ snapshot_download(
 )
 ```
 
-### 모델 디렉터리 구조 (Docker 외부)
+### 모델 디렉터리 구조 (Docker 외부 - MODEL_DIR)
+
+Docker 컨테이너는 `${MODEL_DIR}:/models:ro`로 마운트됩니다. MODEL_DIR은 다음 구조를 가져야 합니다:
 
 ```
-/path/to/models/
-├── VibeVoice-ASR/
+MODEL_DIR/
+├── VibeVoice-ASR/                   # ASR 모델 (17GB)
 │   ├── config.json
 │   ├── model-00001-of-00008.safetensors
-│   ├── model-00002-of-00008.safetensors
-│   ├── model-00003-of-00008.safetensors
-│   ├── model-00004-of-00008.safetensors
-│   ├── model-00005-of-00008.safetensors
-│   ├── model-00006-of-00008.safetensors
-│   ├── model-00007-of-00008.safetensors
-│   ├── model-00008-of-00008.safetensors
+│   ├── ... (8 shards)
 │   ├── model.safetensors.index.json
 │   └── README.md
-├── VibeVoice-Realtime-0.5B/
+├── VibeVoice-Realtime-0.5B/        # TTS 0.5B 스트리밍 모델 (1.9GB)
 │   ├── config.json
+│   ├── preprocessor_config.json
 │   ├── model.safetensors
-│   └── ...
-└── voices/                          # TTS 음성 프리셋 (선택)
-    └── streaming_model/
-        ├── carter.pt
-        ├── wayne.pt
-        └── ...
+│   └── README.md
+├── VibeVoice-1.5B/                  # TTS 1.5B 전체 모델 (5.4GB)
+│   ├── config.json
+│   ├── preprocessor_config.json
+│   ├── model-00001-of-00003.safetensors
+│   ├── model-00002-of-00003.safetensors
+│   ├── model-00003-of-00003.safetensors
+│   ├── model.safetensors.index.json
+│   └── README.md
+└── voices/
+    ├── streaming_model/             # 0.5B 음성 프리셋 (25개 .pt)
+    │   ├── en-Carter_man.pt
+    │   ├── en-Davis_man.pt
+    │   └── ... (총 25개, 10개 언어)
+    └── full_model/                  # 1.5B 음성 프리셋 (9개 .wav)
+        ├── en-Alice_woman.wav
+        ├── en-Carter_man.wav
+        ├── en-Frank_man.wav
+        ├── en-Mary_woman_bgm.wav
+        ├── en-Maya_woman.wav
+        ├── in-Samuel_man.wav
+        ├── zh-Anchen_man_bgm.wav
+        ├── zh-Bowen_man.wav
+        └── zh-Xinran_woman.wav
+```
+
+#### MODEL_DIR 심볼릭 링크 구성 예시
+
+모델 데이터가 분산된 경우 심볼릭 링크로 구성할 수 있습니다:
+
+```bash
+BASE=/path/to/VibeVoiceDockerApiServer
+mkdir -p $BASE/models/voices
+
+ln -sfn $BASE/VibeVoice-ASR_Data      $BASE/models/VibeVoice-ASR
+ln -sfn $BASE/VibeVoice-Realtime-0.5B $BASE/models/VibeVoice-Realtime-0.5B
+ln -sfn $BASE/VibeVoice/demo/voices/streaming_model $BASE/models/voices/streaming_model
 ```
 
 ### 모델 다운로드 확인
@@ -248,12 +301,30 @@ VibeVoiceDockerOpenaiApiServer/
 | Health check 엔드포인트 | ✅ | `app/main.py` |
 | `/v1/models` 엔드포인트 | ✅ | `app/main.py` |
 
-### Phase 4: Open WebUI 연동 ⏳ 진행 중
+### Phase 4: 모델 데이터 및 환경 설정 ✅ 완료
+
+| 작업 | 상태 | 비고 |
+|------|------|------|
+| VibeVoice-ASR 모델 다운로드 (17GB, 8 shards) | ✅ | `VibeVoice-ASR_Data/` |
+| `model.safetensors.index.json` 다운로드 | ✅ | 샤드 인덱스 파일 |
+| VibeVoice-Realtime-0.5B 모델 다운로드 (1.9GB) | ✅ | `VibeVoice-Realtime-0.5B/` |
+| 음성 프리셋 확보 (25개 .pt 파일) | ✅ | `VibeVoice/demo/voices/streaming_model/` |
+| MODEL_DIR 심볼릭 링크 구성 | ✅ | `models/` 디렉터리 |
+| 기본 dtype을 float16으로 변경 | ✅ | VRAM 절약 및 호환성 |
+| batch_size 설정 추가 | ✅ | 기본값 1 |
+
+### Phase 5: Docker 빌드/실행 테스트 및 Open WebUI 연동 ✅ 완료 (일부 진행 중)
 
 | 작업 | 상태 | 비고 |
 |------|------|------|
 | Open WebUI 설정 가이드 | ✅ | `README.md` 포함 |
-| 통합 테스트 | ⏳ | 실제 환경에서 테스트 필요 |
+| Docker 빌드 테스트 | ✅ | `nvcr.io/nvidia/pytorch:25.01-py3` 베이스, 빌드 성공 |
+| Docker 실행 테스트 (TTS 1.5B) | ✅ | GTX 1660 Ti (6GB), 전체 API 테스트 6/6 통과 |
+| GPU device_ids 설정 | ✅ | `nvidia-smi` 인덱스 기준 `device_ids: ['0']` |
+| Attention 구현 호환성 수정 | ✅ | Pre-Ampere GPU: `flash_attention_2` → `sdpa` 변경 |
+| 기본 호스트 포트 변경 | ✅ | `8080` → `8899` |
+| run-test.sh 테스트 스크립트 검증 | ✅ | `--model 1.5b --skip-build` 등 옵션 동작 확인 |
+| Open WebUI 통합 테스트 | ⏳ | STT/TTS 연동 테스트 필요 |
 | 성능 최적화 | ⏳ | 테스트 결과에 따라 진행 |
 
 ---
@@ -283,37 +354,47 @@ VibeVoiceDockerOpenaiApiServer/
 | **일반 x86_64 서버** | amd64 | `nvcr.io/nvidia/pytorch:25.01-py3` | NVIDIA CUDA |
 | **NVIDIA DGX Spark** | arm64 (Grace CPU) | `nvcr.io/nvidia/pytorch:24.08-py3` | Grace Blackwell |
 
+### 기본 추론 설정
+
+| 항목 | 환경 변수 | 기본값 | 설명 |
+|------|-----------|--------|------|
+| ASR dtype | `ASR_DTYPE` | `float16` | ASR 모델 정밀도 |
+| TTS dtype | `TTS_DTYPE` | `float16` | TTS 모델 정밀도 |
+| Batch size | `BATCH_SIZE` | `1` | 추론 배치 크기 |
+| Attention | `ATTN_IMPLEMENTATION` | `sdpa` | 기본값. Ampere+ GPU에서만 `flash_attention_2` 사용 가능 |
+| Host 포트 | `API_PORT` | `8899` | 호스트 노출 포트 (컨테이너 내부: 8080) |
+
+> **참고**: 기본 dtype은 `float16` (FP16)입니다. bfloat16이 필요한 경우 환경 변수로 오버라이드할 수 있습니다.
+> **참고**: Flash Attention 2는 NVIDIA Ampere 아키텍처(SM 80) 이상에서만 지원됩니다. Pre-Ampere GPU(Turing: GTX 16xx/RTX 20xx, Volta: V100 등)에서는 반드시 `sdpa`를 사용해야 합니다.
+
 ### 실행 방법
 
 #### x86_64 환경 (일반 NVIDIA GPU 서버)
 
 ```bash
-# 환경 변수 설정
-export MODEL_DIR=/path/to/your/models
-
-# 빌드 및 실행
+# run-test.sh 사용 (권장) — 빌드/실행/테스트 자동 수행
 cd VibeVoiceDockerOpenaiApiServer
-docker compose up -d --build
+MODEL_DIR=/path/to/your/models ./run-test.sh --model 1.5b
+
+# 또는 docker compose 직접 사용
+MODEL_DIR=/path/to/your/models docker compose up -d --build
+
+# bfloat16으로 실행하려면
+MODEL_DIR=/path/to/your/models ASR_DTYPE=bfloat16 TTS_DTYPE=bfloat16 docker compose up -d --build
 ```
 
 #### DGX Spark 환경 (ARM64)
 
 ```bash
-# 환경 변수 설정
-export MODEL_DIR=/path/to/your/models
-
-# DGX Spark 전용 compose 파일로 실행
-docker compose -f docker-compose.dgx-spark.yml up -d --build
+# DGX Spark 전용 compose 파일로 실행 (SDPA 자동 적용)
+MODEL_DIR=/path/to/your/models docker compose -f docker-compose.dgx-spark.yml up -d --build
 ```
 
 #### Open WebUI와 함께 실행
 
 ```bash
-# 환경 변수 설정
-export MODEL_DIR=/path/to/your/models
-
 # Open WebUI 통합 실행
-docker compose -f docker-compose.with-openwebui.yml up -d --build
+MODEL_DIR=/path/to/your/models docker compose -f docker-compose.with-openwebui.yml up -d --build
 ```
 
 ---
@@ -355,14 +436,14 @@ numpy>=1.24.0
 ```bash
 # TTS 설정
 AUDIO_TTS_ENGINE=openai
-AUDIO_TTS_OPENAI_API_BASE_URL=http://vibevoice-api:8080/v1
+AUDIO_TTS_OPENAI_API_BASE_URL=http://vibevoice-api:8899/v1
 AUDIO_TTS_OPENAI_API_KEY=not-needed
 AUDIO_TTS_MODEL=vibevoice-realtime
 AUDIO_TTS_VOICE=carter
 
 # STT 설정
 AUDIO_STT_ENGINE=openai
-AUDIO_STT_OPENAI_API_BASE_URL=http://vibevoice-api:8080/v1
+AUDIO_STT_OPENAI_API_BASE_URL=http://vibevoice-api:8899/v1
 AUDIO_STT_OPENAI_API_KEY=not-needed
 AUDIO_STT_MODEL=vibevoice-asr
 ```
@@ -373,17 +454,21 @@ AUDIO_STT_MODEL=vibevoice-asr
 
 ### GPU 요구사항
 
-| 모델 | VRAM 요구량 | 비고 |
-|------|-------------|------|
-| VibeVoice-ASR (7B) | ~17GB | bfloat16 기준 |
-| VibeVoice-Realtime (0.5B) | ~2-4GB | 경량 모델 |
-| **동시 로딩** | ~20GB+ | 분리 배포 권장 |
+| 모델 | VRAM (float16) | VRAM (bfloat16) | 비고 |
+|------|----------------|-----------------|------|
+| VibeVoice-ASR (7B) | ~14GB | ~17GB | float16 기본 |
+| VibeVoice-Realtime (0.5B) | ~1-2GB | ~2-4GB | 경량 모델 |
+| VibeVoice-1.5B | ~3-4GB | ~5-6GB | 고품질 모델 |
+| **ASR + 0.5B** | ~16GB+ | ~20GB+ | 분리 배포 권장 |
+| **ASR + 1.5B** | ~18GB+ | ~23GB+ | 분리 배포 권장 |
+| **ASR + both TTS** | ~20GB+ | ~25GB+ | 대용량 GPU 필요 |
 
 ### 플랫폼별 고려사항
 
 #### x86_64 (일반 NVIDIA GPU)
-- Flash Attention 2 지원 (최적 성능)
-- CUDA Compute Capability 7.0+ 권장 (V100, RTX 20xx 이상)
+- **Ampere+ (SM 80+)**: RTX 30xx, A100, RTX 40xx 등 — `flash_attention_2` 사용 가능 (최적 성능)
+- **Pre-Ampere (SM < 80)**: GTX 16xx, RTX 20xx, V100 등 — `sdpa` 사용 필수
+- CUDA Compute Capability 7.0+ 권장
 
 #### DGX Spark (ARM64 Grace Blackwell)
 - Flash Attention 2 대신 **SDPA (Scaled Dot-Product Attention)** 사용
@@ -393,13 +478,21 @@ AUDIO_STT_MODEL=vibevoice-asr
 
 ### 성능 고려사항
 
-1. **Attention 구현**:
-   - x86_64: `flash_attention_2` (권장)
+1. **정밀도 (dtype)**:
+   - 기본: `float16` (FP16) — VRAM 절약, 대부분의 GPU 호환
+   - 대안: `bfloat16` — 더 넓은 dynamic range, Ampere+ GPU 권장
+   - 대안: `float32` — 최고 정밀도, VRAM 2배 사용
+
+2. **Attention 구현**:
+   - x86_64 Ampere+: `flash_attention_2` (최적 성능)
+   - x86_64 Pre-Ampere: `sdpa` (필수, 기본값)
    - DGX Spark: `sdpa` (필수)
 
-2. **모델 분리 배포**: GPU 메모리 제약 시 ASR/TTS 서버 분리
+3. **Batch Size**: 기본값 `1`. 단일 요청 순차 처리.
 
-3. **외부 모델 스토리지**:
+4. **모델 분리 배포**: GPU 메모리 제약 시 ASR/TTS 서버 분리
+
+5. **외부 모델 스토리지**:
    - 모델 파일은 Docker 외부에 저장하여 이미지 크기 최소화
    - NFS, NVMe SSD 등 고속 스토리지 권장
 
@@ -439,3 +532,8 @@ AUDIO_STT_MODEL=vibevoice-asr
 | 2026-01-26 | 1.0 | 초기 계획 수립 |
 | 2026-01-26 | 1.1 | 모델 다운로드 가이드, DGX Spark 지원, 외부 모델 마운트 추가 |
 | 2026-01-26 | 2.0 | **구현 완료**: Phase 1-3 완료, 프로젝트 구조 확정, 구현 상태 반영 |
+| 2026-02-05 | 2.1 | **모델 데이터 완료**: ASR index 파일, Realtime-0.5B 모델 다운로드, MODEL_DIR 심볼릭 링크 구성 |
+| 2026-02-05 | 2.2 | **기본 dtype 변경**: bfloat16 → float16 (FP16), batch_size=1 설정 추가, Phase 4 추가 |
+| 2026-02-05 | 2.3 | **모델 지원 범위 명확화**: VibeVoice-TTS 1.5B 미지원 명시, 0.5B Realtime만 TTS 지원 |
+| 2026-02-06 | 3.0 | **듀얼 모델 지원**: VibeVoice-1.5B TTS 추가 (MS 공식 모델 + shijincai fork 추론 코드), TTS_MODEL_TYPE 환경 변수, 모델별 라우팅, WAV 음성 프리셋 |
+| 2026-02-06 | 3.1 | **Docker 빌드/실행 테스트 완료**: GTX 1660 Ti 환경에서 TTS 1.5B 전체 테스트 6/6 통과. GPU device_ids 설정(`['0']`), Attention `sdpa`로 변경(Pre-Ampere 호환), 기본 호스트 포트 `8899`로 변경, README/PLAN 문서 갱신 |

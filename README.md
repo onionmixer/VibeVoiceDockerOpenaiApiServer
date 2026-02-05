@@ -6,7 +6,9 @@ OpenAI-compatible TTS (Text-to-Speech) and STT (Speech-to-Text) API server using
 
 - **OpenAI-compatible API**: Drop-in replacement for OpenAI's audio APIs
 - **STT (Speech-to-Text)**: Using VibeVoice-ASR (7B) with 60-minute long-form support
-- **TTS (Text-to-Speech)**: Using VibeVoice-Realtime (0.5B) with ~200ms latency
+- **TTS (Text-to-Speech)**: Dual model support
+  - **VibeVoice-Realtime (0.5B)**: ~200ms latency, 25 voice presets, streaming
+  - **VibeVoice-1.5B**: Higher quality, 9 voice presets, CFG-based
 - **Multi-architecture**: Supports both x86_64 (NVIDIA CUDA) and ARM64 (DGX Spark)
 - **Open WebUI Integration**: Ready-to-use with Open WebUI
 
@@ -33,9 +35,13 @@ pip install huggingface_hub
 huggingface-cli download microsoft/VibeVoice-ASR \
     --local-dir /path/to/models/VibeVoice-ASR
 
-# Download TTS model (~2GB)
+# Download TTS 0.5B streaming model (~2GB)
 huggingface-cli download microsoft/VibeVoice-Realtime-0.5B \
     --local-dir /path/to/models/VibeVoice-Realtime-0.5B
+
+# Download TTS 1.5B full model (~5.4GB) from Microsoft
+huggingface-cli download microsoft/VibeVoice \
+    --local-dir /path/to/models/VibeVoice-1.5B
 ```
 
 ### 2. Configure Environment
@@ -49,6 +55,28 @@ cp .env.example .env
 ```
 
 ### 3. Run with Docker Compose
+
+#### Using run-test.sh (Recommended)
+
+```bash
+# TTS 0.5B only (default)
+MODEL_DIR=/path/to/your/models ./run-test.sh
+
+# TTS 1.5B only
+MODEL_DIR=/path/to/your/models ./run-test.sh --model 1.5b
+
+# Both TTS models
+MODEL_DIR=/path/to/your/models ./run-test.sh --model both
+
+# With ASR enabled
+MODEL_DIR=/path/to/your/models ./run-test.sh --asr
+
+# Skip build (image already built)
+MODEL_DIR=/path/to/your/models ./run-test.sh --model 1.5b --skip-build
+
+# Stop containers
+./run-test.sh --down
+```
 
 #### x86_64 (Standard NVIDIA GPU)
 
@@ -73,10 +101,10 @@ docker compose -f docker-compose.with-openwebui.yml up -d --build
 
 ## API Usage Examples
 
-### Text-to-Speech
+### Text-to-Speech (0.5B Streaming)
 
 ```bash
-curl -X POST http://localhost:8080/v1/audio/speech \
+curl -X POST http://localhost:8899/v1/audio/speech \
   -H "Content-Type: application/json" \
   -d '{
     "model": "vibevoice-realtime",
@@ -87,10 +115,39 @@ curl -X POST http://localhost:8080/v1/audio/speech \
   --output speech.wav
 ```
 
+### Text-to-Speech (1.5B Full)
+
+```bash
+curl -X POST http://localhost:8899/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "vibevoice-1.5b",
+    "input": "Hello, how are you today?",
+    "voice": "alice",
+    "response_format": "wav"
+  }' \
+  --output speech.wav
+```
+
+### Python (OpenAI SDK)
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8899/v1", api_key="unused")
+
+response = client.audio.speech.create(
+    model="vibevoice-1.5b",
+    input="Hello, how are you today?",
+    voice="alice",
+)
+response.stream_to_file("speech.wav")
+```
+
 ### Speech-to-Text
 
 ```bash
-curl -X POST http://localhost:8080/v1/audio/transcriptions \
+curl -X POST http://localhost:8899/v1/audio/transcriptions \
   -F "file=@audio.wav" \
   -F "model=vibevoice-asr" \
   -F "response_format=json"
@@ -99,7 +156,7 @@ curl -X POST http://localhost:8080/v1/audio/transcriptions \
 ### Verbose Transcription (with timestamps)
 
 ```bash
-curl -X POST http://localhost:8080/v1/audio/transcriptions \
+curl -X POST http://localhost:8899/v1/audio/transcriptions \
   -F "file=@audio.wav" \
   -F "model=vibevoice-asr" \
   -F "response_format=verbose_json"
@@ -112,14 +169,14 @@ curl -X POST http://localhost:8080/v1/audio/transcriptions \
 ```bash
 # TTS Settings
 AUDIO_TTS_ENGINE=openai
-AUDIO_TTS_OPENAI_API_BASE_URL=http://vibevoice-api:8080/v1
+AUDIO_TTS_OPENAI_API_BASE_URL=http://vibevoice-api:8899/v1
 AUDIO_TTS_OPENAI_API_KEY=not-needed
-AUDIO_TTS_MODEL=vibevoice-realtime
-AUDIO_TTS_VOICE=carter
+AUDIO_TTS_MODEL=vibevoice-1.5b        # or vibevoice-realtime for 0.5B
+AUDIO_TTS_VOICE=alice                  # or carter, etc.
 
 # STT Settings
 AUDIO_STT_ENGINE=openai
-AUDIO_STT_OPENAI_API_BASE_URL=http://vibevoice-api:8080/v1
+AUDIO_STT_OPENAI_API_BASE_URL=http://vibevoice-api:8899/v1
 AUDIO_STT_OPENAI_API_KEY=not-needed
 AUDIO_STT_MODEL=vibevoice-asr
 ```
@@ -131,47 +188,64 @@ AUDIO_STT_MODEL=vibevoice-asr
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DEVICE` | `cuda` | Device (cuda, cpu) |
-| `ATTN_IMPLEMENTATION` | `flash_attention_2` | Attention (flash_attention_2, sdpa) |
+| `ATTN_IMPLEMENTATION` | `sdpa` | Attention (sdpa, flash_attention_2) |
 | `ASR_ENABLED` | `true` | Enable STT service |
 | `TTS_ENABLED` | `true` | Enable TTS service |
+| `TTS_MODEL_TYPE` | `0.5b` | TTS model selection: `0.5b`, `1.5b`, or `both` |
 | `ASR_MODEL_PATH` | `/models/VibeVoice-ASR` | ASR model path |
-| `TTS_MODEL_PATH` | `/models/VibeVoice-Realtime-0.5B` | TTS model path |
+| `TTS_MODEL_PATH` | `/models/VibeVoice-Realtime-0.5B` | TTS 0.5B model path |
+| `TTS_1_5B_MODEL_PATH` | `/models/VibeVoice-1.5B` | TTS 1.5B model path |
 | `DEFAULT_VOICE` | `carter` | Default TTS voice |
-| `API_PORT` | `8080` | API server port |
+| `API_PORT` | `8899` | Host-side API port (container internal: 8080) |
 
 ### Platform-Specific Settings
 
 | Platform | `ATTN_IMPLEMENTATION` | Notes |
 |----------|----------------------|-------|
-| x86_64 (CUDA) | `flash_attention_2` | Recommended for performance |
-| DGX Spark (ARM64) | `sdpa` | Required (Flash Attention not supported) |
+| x86_64 (Ampere+: RTX 30xx, A100, ...) | `flash_attention_2` | Best performance |
+| x86_64 (Pre-Ampere: GTX 16xx, RTX 20xx, ...) | `sdpa` | Required (Flash Attention not supported) |
+| DGX Spark (ARM64) | `sdpa` | Required |
+
+> **Note**: Flash Attention 2 requires NVIDIA Ampere architecture (SM 80) or newer. For pre-Ampere GPUs (Turing, Volta, etc.), use `sdpa`.
 
 ## GPU Requirements
 
-| Model | VRAM | Notes |
-|-------|------|-------|
-| VibeVoice-ASR (7B) | ~17GB | bfloat16 |
-| VibeVoice-Realtime (0.5B) | ~2-4GB | Lightweight |
-| Both models | ~20GB+ | Consider separate deployment |
+| Model | VRAM (float16) | Notes |
+|-------|----------------|-------|
+| VibeVoice-ASR (7B) | ~14GB | STT only |
+| VibeVoice-Realtime (0.5B) | ~2GB | Low-latency streaming TTS |
+| VibeVoice-1.5B | ~4GB | High-quality TTS |
+| ASR + 0.5B TTS | ~16GB+ | Consider separate deployment |
+| ASR + 1.5B TTS | ~18GB+ | Consider separate deployment |
 
 ## Model Directory Structure
 
 ```
 /path/to/models/
-├── VibeVoice-ASR/
+├── VibeVoice-ASR/                    # ASR model (~17GB)
 │   ├── config.json
 │   ├── model-00001-of-00008.safetensors
-│   ├── model-00002-of-00008.safetensors
-│   ├── ... (8 files total)
+│   ├── ... (8 shards total)
 │   └── model.safetensors.index.json
-├── VibeVoice-Realtime-0.5B/
+├── VibeVoice-Realtime-0.5B/         # TTS 0.5B streaming model (~1.9GB)
 │   ├── config.json
 │   ├── model.safetensors
 │   └── ...
-└── voices/                    # TTS voice presets (optional)
-    └── streaming_model/
-        ├── carter.pt
-        ├── wayne.pt
+├── VibeVoice-1.5B/                   # TTS 1.5B full model (~5.4GB)
+│   ├── config.json
+│   ├── model-00001-of-00003.safetensors
+│   ├── model-00002-of-00003.safetensors
+│   ├── model-00003-of-00003.safetensors
+│   └── model.safetensors.index.json
+└── voices/
+    ├── streaming_model/              # 0.5B voice presets (25x .pt)
+    │   ├── en-Carter_man.pt
+    │   ├── en-Davis_man.pt
+    │   └── ...
+    └── full_model/                   # 1.5B voice presets (9x .wav)
+        ├── en-Alice_woman.wav
+        ├── en-Carter_man.wav
+        ├── en-Frank_man.wav
         └── ...
 ```
 
@@ -193,4 +267,6 @@ AUDIO_STT_MODEL=vibevoice-asr
 - [VibeVoice GitHub](https://github.com/microsoft/VibeVoice)
 - [VibeVoice-ASR on HuggingFace](https://huggingface.co/microsoft/VibeVoice-ASR)
 - [VibeVoice-Realtime on HuggingFace](https://huggingface.co/microsoft/VibeVoice-Realtime-0.5B)
+- [VibeVoice-1.5B on HuggingFace](https://huggingface.co/microsoft/VibeVoice) - Microsoft official model
+- [shijincai/VibeVoice](https://github.com/shijincai/VibeVoice) - Restored 1.5B inference code
 - [Open WebUI](https://docs.openwebui.com/)

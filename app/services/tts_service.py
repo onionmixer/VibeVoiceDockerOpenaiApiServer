@@ -1,5 +1,7 @@
 """
-TTS Service - VibeVoice-Realtime wrapper for OpenAI-compatible API.
+TTS Service - VibeVoice wrapper for OpenAI-compatible API.
+
+Supports both 0.5B streaming model and 1.5B full model.
 """
 
 import os
@@ -17,10 +19,15 @@ from app.config import settings, get_torch_dtype
 
 class TTSService:
     """
-    Text-to-Speech service using VibeVoice-Realtime model.
+    Text-to-Speech service using VibeVoice models.
+
+    Supports two model types:
+    - "0.5b": VibeVoice-Realtime-0.5B (streaming, low latency)
+    - "1.5b": VibeVoice-1.5B (full model, higher quality)
     """
 
-    def __init__(self):
+    def __init__(self, model_type: str = "0.5b"):
+        self.model_type = model_type
         self.model = None
         self.processor = None
         self.device = None
@@ -30,11 +37,31 @@ class TTSService:
         self._loaded = False
         self.sample_rate = settings.tts_sample_rate
 
+    @property
+    def model_id(self) -> str:
+        """Return the API model ID for this service."""
+        if self.model_type == "1.5b":
+            return "vibevoice-1.5b"
+        return "vibevoice-realtime"
+
     def load(self) -> None:
         """Load the TTS model and processor."""
         if self._loaded:
             return
 
+        if self.model_type == "1.5b":
+            self._load_1_5b()
+        else:
+            self._load_0_5b()
+
+        # Load voice presets
+        self._load_voice_presets()
+
+        self._loaded = True
+        print(f"[TTS-{self.model_type}] Model loaded successfully")
+
+    def _load_0_5b(self) -> None:
+        """Load the 0.5B streaming model."""
         from vibevoice.modular.modeling_vibevoice_streaming_inference import (
             VibeVoiceStreamingForConditionalGenerationInference,
         )
@@ -47,17 +74,14 @@ class TTSService:
         self.dtype = get_torch_dtype(settings.tts_dtype)
         attn_impl = settings.attn_implementation
 
-        print(f"[TTS] Loading VibeVoice-Realtime from {model_path}")
-        print(f"[TTS] Device: {self.device}, dtype: {self.dtype}, attn: {attn_impl}")
+        print(f"[TTS-0.5b] Loading VibeVoice-Realtime from {model_path}")
+        print(f"[TTS-0.5b] Device: {self.device}, dtype: {self.dtype}, attn: {attn_impl}")
 
         # Load processor
         self.processor = VibeVoiceStreamingProcessor.from_pretrained(model_path)
 
         # Determine dtype and attention based on device
-        if self.device == "mps":
-            load_dtype = torch.float32
-            attn_impl = "sdpa"
-        elif self.device == "cpu":
+        if self.device in ("mps", "cpu"):
             load_dtype = torch.float32
             attn_impl = "sdpa"
         else:
@@ -72,7 +96,7 @@ class TTSService:
                 attn_implementation=attn_impl,
             )
         except Exception as e:
-            print(f"[TTS] Failed with {attn_impl}, trying SDPA: {e}")
+            print(f"[TTS-0.5b] Failed with {attn_impl}, trying SDPA: {e}")
             self.model = VibeVoiceStreamingForConditionalGenerationInference.from_pretrained(
                 model_path,
                 torch_dtype=load_dtype,
@@ -86,28 +110,62 @@ class TTSService:
         self.model.eval()
         self.model.set_ddpm_inference_steps(num_steps=settings.tts_inference_steps)
 
-        # Load voice presets
-        self._load_voice_presets()
+    def _load_1_5b(self) -> None:
+        """Load the 1.5B full model."""
+        from vibevoice.modular.modeling_vibevoice_inference import (
+            VibeVoiceForConditionalGenerationInference,
+        )
+        from vibevoice.processor.vibevoice_processor import (
+            VibeVoiceProcessor,
+        )
 
-        self._loaded = True
-        print("[TTS] Model loaded successfully")
+        model_path = settings.tts_1_5b_model_path
+        self.device = settings.device
+        self.dtype = get_torch_dtype(settings.tts_dtype)
+        attn_impl = settings.attn_implementation
+
+        print(f"[TTS-1.5b] Loading VibeVoice-1.5B from {model_path}")
+        print(f"[TTS-1.5b] Device: {self.device}, dtype: {self.dtype}, attn: {attn_impl}")
+
+        # Load processor
+        self.processor = VibeVoiceProcessor.from_pretrained(model_path)
+
+        # Determine dtype and attention based on device
+        if self.device in ("mps", "cpu"):
+            load_dtype = torch.float32
+            attn_impl = "sdpa"
+        else:
+            load_dtype = self.dtype
+
+        # Load model
+        try:
+            self.model = VibeVoiceForConditionalGenerationInference.from_pretrained(
+                model_path,
+                torch_dtype=load_dtype,
+                device_map=self.device if self.device in ("cuda", "cpu", "auto") else None,
+                attn_implementation=attn_impl,
+            )
+        except Exception as e:
+            print(f"[TTS-1.5b] Failed with {attn_impl}, trying SDPA: {e}")
+            self.model = VibeVoiceForConditionalGenerationInference.from_pretrained(
+                model_path,
+                torch_dtype=load_dtype,
+                device_map=self.device if self.device in ("cuda", "cpu", "auto") else None,
+                attn_implementation="sdpa",
+            )
+
+        if self.device == "mps":
+            self.model.to("mps")
+
+        self.model.eval()
+        self.model.set_ddpm_inference_steps(num_steps=settings.tts_1_5b_inference_steps)
 
     def _load_voice_presets(self) -> None:
         """Load available voice presets from voices directory."""
-        voices_dir = Path(settings.voices_path) / "streaming_model"
-
-        if not voices_dir.exists():
-            # Try relative to TTS model
-            voices_dir = Path(settings.tts_model_path).parent / "voices" / "streaming_model"
-
-        if not voices_dir.exists():
-            print(f"[TTS] Warning: Voices directory not found at {voices_dir}")
-            return
-
-        for pt_file in voices_dir.rglob("*.pt"):
-            name = pt_file.stem.lower()
-            self.voice_presets[name] = pt_file
-            print(f"[TTS] Found voice preset: {name}")
+        if self.model_type == "1.5b":
+            self._load_voice_presets_1_5b()
+        else:
+            self._load_voice_presets_0_5b()
 
         # Map OpenAI voice names to available presets
         self._voice_mapping = {
@@ -118,6 +176,38 @@ class TTSService:
             "nova": "carter",
             "shimmer": "wayne",
         }
+
+    def _load_voice_presets_0_5b(self) -> None:
+        """Load 0.5B voice presets (.pt files)."""
+        voices_dir = Path(settings.voices_path) / "streaming_model"
+
+        if not voices_dir.exists():
+            voices_dir = Path(settings.tts_model_path).parent / "voices" / "streaming_model"
+
+        if not voices_dir.exists():
+            print(f"[TTS-0.5b] Warning: Voices directory not found at {voices_dir}")
+            return
+
+        for pt_file in voices_dir.rglob("*.pt"):
+            name = pt_file.stem.lower()
+            self.voice_presets[name] = pt_file
+            print(f"[TTS-0.5b] Found voice preset: {name}")
+
+    def _load_voice_presets_1_5b(self) -> None:
+        """Load 1.5B voice presets (.wav files)."""
+        voices_dir = Path(settings.voices_path) / "full_model"
+
+        if not voices_dir.exists():
+            voices_dir = Path(settings.tts_1_5b_model_path).parent / "voices" / "full_model"
+
+        if not voices_dir.exists():
+            print(f"[TTS-1.5b] Warning: Voices directory not found at {voices_dir}")
+            return
+
+        for wav_file in voices_dir.rglob("*.wav"):
+            name = wav_file.stem.lower()
+            self.voice_presets[name] = wav_file
+            print(f"[TTS-1.5b] Found voice preset: {name}")
 
     def _get_voice_path(self, voice: str) -> Optional[Path]:
         """Get voice preset path for given voice name."""
@@ -155,14 +245,21 @@ class TTSService:
         if voice_path is None:
             return None
 
-        print(f"[TTS] Loading voice preset: {voice_path}")
-        prefilled_outputs = torch.load(
-            voice_path,
-            map_location=self.device,
-            weights_only=False,
-        )
-        self._voice_cache[voice_lower] = prefilled_outputs
-        return prefilled_outputs
+        if self.model_type == "1.5b":
+            # For 1.5B, store the WAV file path string (processor handles loading)
+            print(f"[TTS-1.5b] Registering voice preset: {voice_path}")
+            self._voice_cache[voice_lower] = str(voice_path)
+        else:
+            # For 0.5B, load pre-cached KV as torch tensor
+            print(f"[TTS-0.5b] Loading voice preset: {voice_path}")
+            prefilled_outputs = torch.load(
+                voice_path,
+                map_location=self.device,
+                weights_only=False,
+            )
+            self._voice_cache[voice_lower] = prefilled_outputs
+
+        return self._voice_cache[voice_lower]
 
     def synthesize(
         self,
@@ -190,8 +287,21 @@ class TTSService:
             raise ValueError("Input text cannot be empty")
 
         # Clean text
-        text = text.replace("'", "'").replace('"', '"').replace('"', '"')
+        text = text.replace("\u2018", "'").replace("\u2019", "'").replace("\u201c", '"').replace("\u201d", '"')
 
+        if self.model_type == "1.5b":
+            return self._synthesize_1_5b(text, voice, speed, response_format)
+        else:
+            return self._synthesize_0_5b(text, voice, speed, response_format)
+
+    def _synthesize_0_5b(
+        self,
+        text: str,
+        voice: str,
+        speed: float,
+        response_format: str,
+    ) -> bytes:
+        """Synthesize using the 0.5B streaming model."""
         # Get voice preset
         prefilled_outputs = self._load_voice_cache(voice)
         if prefilled_outputs is None:
@@ -223,7 +333,59 @@ class TTSService:
                 all_prefilled_outputs=copy.deepcopy(prefilled_outputs),
             )
 
-        # Get audio output
+        return self._extract_audio(outputs, response_format)
+
+    def _synthesize_1_5b(
+        self,
+        text: str,
+        voice: str,
+        speed: float,
+        response_format: str,
+    ) -> bytes:
+        """Synthesize using the 1.5B full model."""
+        # Get voice preset (WAV path string)
+        voice_wav_path = self._load_voice_cache(voice)
+        if voice_wav_path is None:
+            raise ValueError(f"Voice preset '{voice}' not found")
+
+        # Wrap text as script format expected by VibeVoiceProcessor
+        script_text = f"Speaker 0: {text.strip()}"
+
+        # Process inputs through VibeVoiceProcessor
+        inputs = self.processor(
+            text=script_text,
+            voice_samples=[voice_wav_path],
+            padding=True,
+            return_tensors="pt",
+            return_attention_mask=True,
+        )
+
+        # Move tensor inputs to device
+        for k, v in inputs.items():
+            if torch.is_tensor(v):
+                inputs[k] = v.to(self.device)
+
+        # Remove non-tensor metadata before passing to model
+        parsed_scripts = inputs.pop("parsed_scripts", None)
+        all_speakers_list = inputs.pop("all_speakers_list", None)
+
+        # Generate
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                cfg_scale=settings.tts_1_5b_cfg_scale,
+                tokenizer=self.processor.tokenizer,
+                generation_config={"do_sample": False},
+                verbose=False,
+                parsed_scripts=parsed_scripts,
+                all_speakers_list=all_speakers_list,
+                show_progress_bar=False,
+            )
+
+        return self._extract_audio(outputs, response_format)
+
+    def _extract_audio(self, outputs, response_format: str) -> bytes:
+        """Extract audio from model outputs and convert to requested format."""
         if outputs.speech_outputs and outputs.speech_outputs[0] is not None:
             audio = outputs.speech_outputs[0]
             if torch.is_tensor(audio):

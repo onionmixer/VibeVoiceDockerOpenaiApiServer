@@ -20,6 +20,14 @@ services:
       - VOICES_PATH=/models/voices
       - ASR_ENABLED=${ASR_ENABLED:-true}
       - TTS_ENABLED=${TTS_ENABLED:-true}
+      - ASR_DTYPE=${ASR_DTYPE:-float16}
+      - TTS_DTYPE=${TTS_DTYPE:-float16}
+      - BATCH_SIZE=${BATCH_SIZE:-1}
+      # TTS model selection: "0.5b", "1.5b", or "both"
+      - TTS_MODEL_TYPE=${TTS_MODEL_TYPE:-0.5b}
+      - TTS_1_5B_MODEL_PATH=/models/VibeVoice-1.5B
+      - TTS_1_5B_CFG_SCALE=${TTS_1_5B_CFG_SCALE:-1.3}
+      - TTS_1_5B_INFERENCE_STEPS=${TTS_1_5B_INFERENCE_STEPS:-10}
     volumes:
       - ${MODEL_DIR}:/models:ro
       - ${HF_CACHE:-~/.cache/huggingface}:/root/.cache/huggingface

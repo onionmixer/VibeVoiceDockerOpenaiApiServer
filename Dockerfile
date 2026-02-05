@@ -62,8 +62,16 @@ ENV TTS_MODEL_PATH=/models/VibeVoice-Realtime-0.5B
 ENV VOICES_PATH=/models/voices
 ENV ASR_ENABLED=true
 ENV TTS_ENABLED=true
+ENV ASR_DTYPE=float16
+ENV TTS_DTYPE=float16
+ENV BATCH_SIZE=1
 ENV API_HOST=0.0.0.0
 ENV API_PORT=8080
+# TTS model selection: "0.5b", "1.5b", or "both"
+ENV TTS_MODEL_TYPE=0.5b
+ENV TTS_1_5B_MODEL_PATH=/models/VibeVoice-1.5B
+ENV TTS_1_5B_CFG_SCALE=1.3
+ENV TTS_1_5B_INFERENCE_STEPS=10
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \

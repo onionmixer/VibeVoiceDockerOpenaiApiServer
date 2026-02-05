@@ -3,9 +3,10 @@ TTS Routes - OpenAI-compatible Text-to-Speech API.
 
 Implements:
 - POST /v1/audio/speech
+- GET /v1/audio/voices
 """
 
-from typing import Optional, List
+from typing import Optional, List, Dict
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import Response
 
@@ -16,35 +17,61 @@ from app.services.tts_service import TTSService
 
 router = APIRouter(prefix="/v1/audio", tags=["Text-to-Speech"])
 
-# Global service instance (initialized on startup)
-_tts_service: Optional[TTSService] = None
+# Global service instances (initialized on startup)
+_tts_services: Dict[str, TTSService] = {}
 
 
-def get_tts_service() -> TTSService:
-    """Dependency to get TTS service."""
-    if _tts_service is None:
+def get_tts_service(model_id: Optional[str] = None) -> TTSService:
+    """Get TTS service for the given model ID."""
+    if not _tts_services:
         raise HTTPException(
             status_code=503,
             detail="TTS service not initialized"
         )
-    if not _tts_service.is_loaded:
+
+    if model_id:
+        # Route by model ID
+        if model_id == "vibevoice-1.5b" and "1.5b" in _tts_services:
+            service = _tts_services["1.5b"]
+        elif model_id in ("vibevoice-realtime", "tts-1", "tts-1-hd") and "0.5b" in _tts_services:
+            service = _tts_services["0.5b"]
+        else:
+            # Use whatever is available
+            service = next(iter(_tts_services.values()))
+    else:
+        # Default: prefer 0.5b for backward compat
+        service = _tts_services.get("0.5b") or next(iter(_tts_services.values()))
+
+    if not service.is_loaded:
         raise HTTPException(
             status_code=503,
             detail="TTS model not loaded"
         )
-    return _tts_service
+    return service
 
 
-def init_tts_service() -> Optional[TTSService]:
-    """Initialize TTS service on startup."""
-    global _tts_service
+def init_tts_service() -> Dict[str, TTSService]:
+    """Initialize TTS service(s) on startup based on configuration."""
+    global _tts_services
     if not settings.tts_enabled:
         print("[TTS] Service disabled by configuration")
-        return None
+        return {}
 
-    _tts_service = TTSService()
-    _tts_service.load()
-    return _tts_service
+    model_type = settings.tts_model_type.lower()
+
+    if model_type in ("0.5b", "both"):
+        print("[TTS] Initializing 0.5B streaming model...")
+        service_05b = TTSService(model_type="0.5b")
+        service_05b.load()
+        _tts_services["0.5b"] = service_05b
+
+    if model_type in ("1.5b", "both"):
+        print("[TTS] Initializing 1.5B full model...")
+        service_15b = TTSService(model_type="1.5b")
+        service_15b.load()
+        _tts_services["1.5b"] = service_15b
+
+    return _tts_services
 
 
 # Media type mapping
@@ -61,7 +88,6 @@ MEDIA_TYPES = {
 @router.post("/speech")
 async def create_speech(
     request: TTSRequest,
-    service: TTSService = Depends(get_tts_service),
 ):
     """
     Generate speech from text (OpenAI-compatible).
@@ -84,6 +110,9 @@ async def create_speech(
             status_code=400,
             detail=f"Invalid response_format. Must be one of: {list(MEDIA_TYPES.keys())}"
         )
+
+    # Get service based on requested model
+    service = get_tts_service(model_id=request.model)
 
     try:
         audio_bytes = service.synthesize(
@@ -112,24 +141,31 @@ async def create_speech(
 
 
 @router.get("/voices")
-async def list_voices(
-    service: TTSService = Depends(get_tts_service),
-) -> dict:
+async def list_voices() -> dict:
     """
-    List available voices.
+    List available voices from all loaded TTS services.
 
     Note: This is a non-standard endpoint for convenience.
     """
-    voices = service.get_available_voices()
+    if not _tts_services:
+        raise HTTPException(status_code=503, detail="TTS service not initialized")
+
+    # Aggregate voices from all loaded services
+    all_voices = {}
+    for model_type, service in _tts_services.items():
+        if service.is_loaded:
+            for v in service.get_available_voices():
+                if v not in all_voices:
+                    all_voices[v] = {
+                        "voice_id": v,
+                        "name": v.title(),
+                        "language": "en",
+                        "models": [service.model_id],
+                    }
+                else:
+                    all_voices[v]["models"].append(service.model_id)
 
     return {
-        "voices": [
-            {
-                "voice_id": v,
-                "name": v.title(),
-                "language": "en",
-            }
-            for v in voices
-        ],
+        "voices": list(all_voices.values()),
         "default_voice": settings.default_voice,
     }
