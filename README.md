@@ -214,7 +214,7 @@ AUDIO_STT_MODEL=vibevoice-asr
 |-------|----------------|-------|
 | VibeVoice-ASR (7B) | ~14GB | STT only |
 | VibeVoice-Realtime (0.5B) | ~2GB | Low-latency streaming TTS |
-| VibeVoice-1.5B | ~4GB | High-quality TTS |
+| VibeVoice-1.5B | ~4GB + ~1GB inference | High-quality TTS (6GB minimum, 8GB+ recommended) |
 | ASR + 0.5B TTS | ~16GB+ | Consider separate deployment |
 | ASR + 1.5B TTS | ~18GB+ | Consider separate deployment |
 
@@ -247,6 +247,79 @@ AUDIO_STT_MODEL=vibevoice-asr
         ├── en-Carter_man.wav
         ├── en-Frank_man.wav
         └── ...
+```
+
+## Voice Presets
+
+### Available Voices
+
+| Model | Voice | File | Language |
+|-------|-------|------|----------|
+| 0.5B Streaming | carter, davis, emma, frank, grace, mike | `.pt` files | English |
+| 0.5B Streaming | samuel | `.pt` file | Indian English |
+| 0.5B Streaming | *(+ 18 more)* | `.pt` files | de, fr, it, jp, kr, nl, pl, pt, sp |
+| 1.5B Full | alice, carter, frank, maya | `.wav` files | English |
+| 1.5B Full | mary | `.wav` file | English (with BGM) |
+| 1.5B Full | samuel | `.wav` file | Indian English |
+| 1.5B Full | anchen | `.wav` file | Chinese (with BGM) |
+| 1.5B Full | bowen, xinran | `.wav` files | Chinese |
+
+### 1.5B Voice Preset Requirements
+
+The 1.5B model voice presets (`.wav` files in `voices/full_model/`) must meet the following specifications:
+
+| Property | Required Value |
+|----------|---------------|
+| Sample Rate | **16,000 Hz (16kHz)** |
+| Channels | 1 (Mono) |
+| Bit Depth | 16-bit PCM |
+| Duration | **8~10 seconds recommended** |
+
+> **Important**: The original voice samples from Microsoft's repository are 24kHz / 24~30 seconds. These **must be resampled to 16kHz and trimmed to ~8-10 seconds** before use. Using the original files will cause:
+> - **CUDA Out of Memory** errors on GPUs with limited VRAM (e.g., 6GB) due to the long reference audio
+> - **No audio output** errors due to the sample rate mismatch (model expects 16kHz)
+
+#### Preparing Voice Presets
+
+Use the following script to resample and trim voice preset files:
+
+```python
+import wave
+import numpy as np
+from scipy.signal import resample
+import os
+
+voice_dir = '/path/to/models/voices/full_model'
+TARGET_RATE = 16000
+TARGET_DURATION = 8.0  # seconds
+
+for fname in sorted(os.listdir(voice_dir)):
+    if not fname.endswith('.wav'):
+        continue
+    path = os.path.join(voice_dir, fname)
+    with wave.open(path, 'rb') as w:
+        rate = w.getframerate()
+        total_frames = w.getnframes()
+        raw = w.readframes(total_frames)
+
+    audio = np.frombuffer(raw, dtype=np.int16).astype(np.float64)
+
+    # Trim to target duration
+    max_samples = int(min(total_frames / rate, TARGET_DURATION) * rate)
+    audio = audio[:max_samples]
+
+    # Resample to 16kHz if needed
+    if rate != TARGET_RATE:
+        num_target_samples = int(len(audio) * TARGET_RATE / rate)
+        audio = resample(audio, num_target_samples)
+
+    audio_int16 = np.clip(audio, -32768, 32767).astype(np.int16)
+
+    with wave.open(path, 'wb') as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(TARGET_RATE)
+        w.writeframes(audio_int16.tobytes())
 ```
 
 ## Supported Audio Formats
