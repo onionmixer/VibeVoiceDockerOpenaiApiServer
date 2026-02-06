@@ -270,27 +270,23 @@ The 1.5B model voice presets (`.wav` files in `voices/full_model/`) must meet th
 
 | Property | Required Value |
 |----------|---------------|
-| Sample Rate | **16,000 Hz (16kHz)** |
+| Sample Rate | **24,000 Hz (24kHz)** |
 | Channels | 1 (Mono) |
 | Bit Depth | 16-bit PCM |
-| Duration | **8~10 seconds recommended** |
+| Duration | **8 seconds recommended** (max ~9s for 6GB VRAM GPUs) |
 
-> **Important**: The original voice samples from Microsoft's repository are 24kHz / 24~30 seconds. These **must be resampled to 16kHz and trimmed to ~8-10 seconds** before use. Using the original files will cause:
-> - **CUDA Out of Memory** errors on GPUs with limited VRAM (e.g., 6GB) due to the long reference audio
-> - **No audio output** errors due to the sample rate mismatch (model expects 16kHz)
+> **Important**: The original voice samples from Microsoft's repository are 24kHz but 24~30 seconds long. These **must be trimmed to ~8 seconds** before use. Using the original long files will cause **CUDA Out of Memory** errors on GPUs with limited VRAM (e.g., 6GB). Voice audio is cached in CPU RAM after the first request and resampled to 24kHz automatically if needed.
 
 #### Preparing Voice Presets
 
-Use the following script to resample and trim voice preset files:
+Use the following script to trim voice preset files to 8 seconds:
 
 ```python
 import wave
 import numpy as np
-from scipy.signal import resample
 import os
 
 voice_dir = '/path/to/models/voices/full_model'
-TARGET_RATE = 16000
 TARGET_DURATION = 8.0  # seconds
 
 for fname in sorted(os.listdir(voice_dir)):
@@ -300,26 +296,21 @@ for fname in sorted(os.listdir(voice_dir)):
     with wave.open(path, 'rb') as w:
         rate = w.getframerate()
         total_frames = w.getnframes()
+        duration = total_frames / rate
         raw = w.readframes(total_frames)
 
-    audio = np.frombuffer(raw, dtype=np.int16).astype(np.float64)
+    if duration <= TARGET_DURATION:
+        continue
 
-    # Trim to target duration
-    max_samples = int(min(total_frames / rate, TARGET_DURATION) * rate)
+    audio = np.frombuffer(raw, dtype=np.int16)
+    max_samples = int(TARGET_DURATION * rate)
     audio = audio[:max_samples]
-
-    # Resample to 16kHz if needed
-    if rate != TARGET_RATE:
-        num_target_samples = int(len(audio) * TARGET_RATE / rate)
-        audio = resample(audio, num_target_samples)
-
-    audio_int16 = np.clip(audio, -32768, 32767).astype(np.int16)
 
     with wave.open(path, 'wb') as w:
         w.setnchannels(1)
         w.setsampwidth(2)
-        w.setframerate(TARGET_RATE)
-        w.writeframes(audio_int16.tobytes())
+        w.setframerate(rate)
+        w.writeframes(audio.tobytes())
 ```
 
 ## Supported Audio Formats

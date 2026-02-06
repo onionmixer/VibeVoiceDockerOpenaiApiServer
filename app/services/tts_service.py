@@ -246,9 +246,17 @@ class TTSService:
             return None
 
         if self.model_type == "1.5b":
-            # For 1.5B, store the WAV file path string (processor handles loading)
-            print(f"[TTS-1.5b] Registering voice preset: {voice_path}")
-            self._voice_cache[voice_lower] = str(voice_path)
+            # For 1.5B, pre-load WAV into CPU RAM as numpy array.
+            # Uses processor's audio loader to resample to model's expected rate (24kHz).
+            # Cached in CPU memory to avoid disk I/O on every request.
+            print(f"[TTS-1.5b] Loading voice preset into CPU cache: {voice_path}")
+            try:
+                audio_np = self.processor.audio_processor._load_audio_from_path(str(voice_path))
+                self._voice_cache[voice_lower] = audio_np
+                print(f"[TTS-1.5b] Cached: {voice_lower} ({audio_np.shape[0]} samples, {audio_np.nbytes / 1024:.1f} KB)")
+            except Exception as e:
+                print(f"[TTS-1.5b] CPU cache failed, using file path: {e}")
+                self._voice_cache[voice_lower] = str(voice_path)
         else:
             # For 0.5B, load pre-cached KV as torch tensor
             print(f"[TTS-0.5b] Loading voice preset: {voice_path}")
@@ -316,6 +324,10 @@ class TTSService:
             return_attention_mask=True,
         )
 
+        # Free fragmented GPU memory before allocating new tensors
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         # Move to device
         for k, v in inputs.items():
             if torch.is_tensor(v):
@@ -333,7 +345,15 @@ class TTSService:
                 all_prefilled_outputs=copy.deepcopy(prefilled_outputs),
             )
 
-        return self._extract_audio(outputs, response_format)
+        # Extract audio before cleaning up GPU tensors
+        result = self._extract_audio(outputs, response_format)
+
+        # Release GPU memory occupied by intermediate tensors
+        del inputs, outputs
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return result
 
     def _synthesize_1_5b(
         self,
@@ -343,22 +363,27 @@ class TTSService:
         response_format: str,
     ) -> bytes:
         """Synthesize using the 1.5B full model."""
-        # Get voice preset (WAV path string)
-        voice_wav_path = self._load_voice_cache(voice)
-        if voice_wav_path is None:
+        # Get voice preset (cached numpy array or WAV path string as fallback)
+        voice_data = self._load_voice_cache(voice)
+        if voice_data is None:
             raise ValueError(f"Voice preset '{voice}' not found")
 
         # Wrap text as script format expected by VibeVoiceProcessor
         script_text = f"Speaker 0: {text.strip()}"
 
         # Process inputs through VibeVoiceProcessor
+        # voice_data is a numpy array (CPU cached) or string path (fallback)
         inputs = self.processor(
             text=script_text,
-            voice_samples=[voice_wav_path],
+            voice_samples=[voice_data],
             padding=True,
             return_tensors="pt",
             return_attention_mask=True,
         )
+
+        # Free fragmented GPU memory before allocating new tensors
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         # Move tensor inputs to device
         for k, v in inputs.items():
@@ -382,7 +407,15 @@ class TTSService:
                 show_progress_bar=False,
             )
 
-        return self._extract_audio(outputs, response_format)
+        # Extract audio before cleaning up GPU tensors
+        result = self._extract_audio(outputs, response_format)
+
+        # Release GPU memory occupied by intermediate tensors
+        del inputs, outputs, parsed_scripts, all_speakers_list
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return result
 
     def _extract_audio(self, outputs, response_format: str) -> bytes:
         """Extract audio from model outputs and convert to requested format."""
